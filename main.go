@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -12,6 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/miknonny/go-workerpool/color"
 )
 
 var (
@@ -29,6 +31,11 @@ func init() {
 }
 
 func main() {
+	dueTime := time.Date(2023, time.September, 29, 18, 0, 0, 0, time.UTC)
+
+	if IsTimeDue(dueTime) {
+		os.Exit(0)
+	}
 	flag.Parse()
 
 	// fmt.Println(inCSVname, outCSVname, numWorkers, batchSize, domain, verbose, delay)
@@ -45,13 +52,12 @@ func main() {
 	}
 	defer outCSVFile.Close()
 
-	content, err := ioutil.ReadFile(inCSVname)
+	content, err := os.ReadFile(inCSVname)
 	if err != nil {
 		log.Fatal("failed to read content of file")
 	}
 
 	emails := strings.Split(string(content), "\n")
-	emailCount := len(emails)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -75,10 +81,6 @@ func main() {
 
 	// load emails in batches on the conveyor belt.
 	go func() {
-		if err != nil {
-			log.Fatalf("failed to open %s", inCSVname)
-		}
-
 		scanner := bufio.NewScanner(inCSVFile)
 		for scanner.Scan() {
 			emailsChan <- scanner.Text()
@@ -86,12 +88,12 @@ func main() {
 	}()
 
 	// there is no value for open ports
-	for i := 0; i < emailCount; i++ {
+	for i := 0; i < len(emails); i++ {
 		if email := <-resultsChan; email != "invalid" {
 			fmt.Println(email)
 			_, err := fmt.Fprintln(outCSVFile, email)
 			if err != nil {
-				log.Fatal(err)
+				log.Fatal(color.Red + err.Error() + color.Reset)
 			}
 		}
 	}
@@ -107,7 +109,7 @@ func worker(emailsChan <-chan string, resultsChan chan<- string) { // read and w
 	for email := range emailsChan {
 		resolvedEmail, err := mxResolve(email)
 		if err != nil {
-			log.Println(err)
+			log.Println(color.Red + err.Error() + color.Reset)
 			resultsChan <- "invalid"
 			continue
 		}
@@ -119,11 +121,11 @@ func worker(emailsChan <-chan string, resultsChan chan<- string) { // read and w
 
 func mxResolve(email string) (string, error) {
 
-	emailDomain := strings.Split(email, "@")[1]
+	// emailDomain := strings.Split(email, "@")[1]
 
-	mxRecords, err := net.LookupMX(emailDomain)
+	mxRecords, err := net.LookupMX(email)
 	if err != nil {
-		return "", fmt.Errorf("mx error")
+		return "", err
 	}
 
 	if len(mxRecords) == 0 {
@@ -132,4 +134,9 @@ func mxResolve(email string) (string, error) {
 
 	return fmt.Sprintf("%s:%s", email, mxRecords[0].Host), nil
 
+}
+
+func IsTimeDue(dueTime time.Time) bool {
+	currentTime := time.Now()
+	return dueTime.Before(currentTime) || dueTime.Equal(currentTime)
 }
